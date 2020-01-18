@@ -61,6 +61,9 @@ public:
 
     byte *content()  { return _body;    }
 
+    void clear(void) { _bodylen = 0; }
+    void append(char c) { if (_bodylen < (sizeof(_body) / sizeof(byte))) { _body[_bodylen++] = c;} }
+
     /**
      * make an INIT packet for a cpNode
      * @param a             The destination Node's address (0..64)
@@ -104,11 +107,11 @@ public:
     }
 
     void set(char t, int a, int l, byte* b) {
+        clear();
         _type = (Type)t;
         _address = a;
-        _bodylen = l;
-        for (int idx = 0; idx < _bodylen; idx++) {
-            _body[idx] = *b++;
+        for (int idx = 0; idx < l; idx++) {
+            append(*b++);
         }
     }
 
@@ -135,7 +138,25 @@ public:
         , _delay(0)
         , _rx_length(0)
         , _tx_length(0)
+        , initHandler(NULL)
+        , inputHandler(NULL)
+        , outputHandler(NULL)
+        , errorHandler(NULL)
         , _serial(serial_class) { }
+
+    void setInitHandler(void(*newInitHandler) (CMRI_Packet &p)) {
+        initHandler = newInitHandler;
+    }
+    void setErrorHandler(void(*newErrorHandler) (CMRI_Packet &p)) {
+        errorHandler = newErrorHandler;
+    }
+    void setInputHandler(uint16_t numLines,  void(*newInputHandler) (CMRI_Packet &p)) {
+        inputHandler = newInputHandler;
+    }
+    void setOutputHandler(uint16_t numLines, void (*newOutputHandler) (CMRI_Packet &p)) {
+        outputHandler = newOutputHandler;
+    }
+
     /**
      * Convenience routine to get Node Configuration information
      * @return      the number of OUTPUT bits managed by this Node
@@ -170,6 +191,18 @@ public:
      * @param address the Node address (0..64)
      */
     void set_node_address(unsigned int address)       { _address = address; }
+
+    /**
+     * Convenience routine to get transmit delay
+     * @return      the tx delay, units of 10uS
+     */
+    unsigned long  get_tx_delay(void)                 { return _tx_delay; }
+
+    /**
+     * Convenience routine to set the transmpt packet delay
+     * @param txdelay the tx delay, units of 10uS
+     */
+    void set_tx_delay(unsigned int txdelay)           { _tx_delay = txdelay; }
 
     /**
      * Convenience function to pretty print the various CMRI protocol control bytes
@@ -216,8 +249,15 @@ private:
     enum ParseState { SYNC, HEADER, BODY };
     int    _address;
     int   _delay;
-    int   _rx_length;
-    int   _tx_length;
+    uint16_t   _rx_length;
+    uint16_t   _tx_length;
+    unsigned long _tx_delay;
+
+    // callbacks
+    void (*initHandler)   (CMRI_Packet &p);
+    void (*inputHandler)  (CMRI_Packet &p);
+    void (*outputHandler) (CMRI_Packet &p);
+    void (*errorHandler)  (CMRI_Packet &p);
 
     // Variables used by parser...
     int _ptype, _paddr; // packet type and address
