@@ -61,53 +61,16 @@ public:
 
     byte *content()  { return _body;    }
 
-    void clear(void) { _bodylen = 0; }
+    void clear(void) {
+        for (_bodylen = 0; _bodylen < (sizeof(_body) / sizeof(byte)); _bodylen++) {
+            _body[_bodylen] = 0;
+        }
+        _bodylen = 0;
+    }
     void append(char c) { if (_bodylen < (sizeof(_body) / sizeof(byte))) { _body[_bodylen++] = c;} }
 
-    /**
-     * make an INIT packet for a cpNode
-     * @param a             The destination Node's address (0..64)
-     * @param delay_time    In 10's of uS
-     */
-    void initCPNode(int a, int delay_time) {
-        byte body[4];
-        body[0] = 'C';
-        body[1] = (delay_time / 256);
-        body[2] = (delay_time % 256);
-        body[3] = 0;
-        set(INIT, a, 4, body);
-    }
-
-    /**
-     * make a POLL packet
-     * @param a             The queried Node's address (0..64)
-     */
-    void pollNode(int a) {
-        set(POLL, a, 0, NULL);
-    }
-
-    /**
-     * make a TRANSMIT packet
-     * @param a             The destination Node's address (0..64)
-     * @param len           The number of bytes in the body array
-     * @param body          The bits to be transmitted, as an array of 8-bit bytes
-     */
-    void transmitToNode(int a, int len, byte* body) {
-        set(TX, a, len, body);
-    }
-
-    /**
-     * make a RECEIVE packet
-     * @param a             My (the sending Node's) address (0..64)
-     * @param len           The number of bytes in the body array
-     * @param body          The bits to be transmitted, as an array of 8-bit bytes
-     */
-    void transmitFromNode(int a, int len, byte* body) {
-        set(RX, a, len, body);
-    }
-
     void set(char t, int a, int l, byte* b) {
-        clear();
+        clear();    // nothing in body ...
         _type = (Type)t;
         _address = a;
         for (int idx = 0; idx < l; idx++) {
@@ -150,10 +113,10 @@ public:
     void setErrorHandler(void(*newErrorHandler) (CMRI_Packet &p)) {
         errorHandler = newErrorHandler;
     }
-    void setInputHandler(uint16_t numLines,  void(*newInputHandler) (CMRI_Packet &p)) {
+    void setInputHandler(void(*newInputHandler) (CMRI_Packet &p)) {
         inputHandler = newInputHandler;
     }
-    void setOutputHandler(uint16_t numLines, void (*newOutputHandler) (CMRI_Packet &p)) {
+    void setOutputHandler(void (*newOutputHandler) (CMRI_Packet &p)) {
         outputHandler = newOutputHandler;
     }
 
@@ -205,22 +168,24 @@ public:
     void set_tx_delay(unsigned int txdelay)           { _tx_delay = txdelay; }
 
     /**
-     * Convenience function to pretty print the various CMRI protocol control bytes
-     * @param b
-     * @return
+     * Print out a human readable form of the byte using CMRI terminology
+     * @param b byte to "print"
+     * @param printASCII Should it print out 'A' or 0x41
+     * @return the printable version of the byte
      */
-    static String b2s(byte b) {
+    static String b2s(byte b, bool printASCII= true) {
       String s("");
+      if (!printASCII) return String("{0x" + String(b, HEX) + "}");
       switch (b) {
           case CMRI_Packet::SYN:  s = "<SYN>"; break;
           case CMRI_Packet::STX:  s = "<STX>"; break;
           case CMRI_Packet::ETX:  s = "<ETX>"; break;
           case CMRI_Packet::DLE:  s = "<DLE>"; break;
-          default:   
-              if ((b >= ' ') && (b <= '~')) { 
+          default:
+              if ((b >= ' ') && (b <= '~')) {
                 s = s + "'" +   (char)b        + "'";
-              } else { 
-                s = s + "{0x" + String(b, HEX) + "}"; 
+              } else {
+                s = s + "{0x" + String(b, HEX) + "}";
               }
               break;
         }
@@ -228,16 +193,37 @@ public:
     }
 
     /**
+     * Convert a CMRI packet to a printable string for debugging
+     * @param p CMRI Packet to show
+     * @return the human readable representation of the packet
+     */
+    static String packetToString(CMRI_Packet &p) {
+        String s("");
+        s = s + "Packet(type=" + String((char)p.type())
+              + ", addr="      + String((byte)p.address())
+              + ", bodylen="   + String(p.length())
+              + ", body["  ;
+        if (p.length() > 0) {
+            byte *content = p.content();
+            for (int idx = 0; idx < p.length(); idx++) {
+                s = s + CMRI_Node::b2s(content[idx], false);
+            }
+        }
+        s = s + "]);";
+        return s;
+    }
+    /**
      * Read and parse a correctly structured CMRI packet from the serial link
      * @param packet    A place to store the incoming information
      * @return          The Type of the packet (I, P, T, R, N(oop), E(rror) or U(nknown))
      */
-    CMRI_Packet::Type get_packet(CMRI_Packet &packet);
+    CMRI_Packet::Type protocol_handler(void);
+
     /**
      * Send out a packet over the serial link
      * @param packet The packet to send
      */
-    void              put_packet(CMRI_Packet &packet);
+    void              send_packet(CMRI_Packet &packet);
 
     /**
      * wrapper around _serial.read() with a timeout that returns -1
@@ -260,6 +246,7 @@ private:
     void (*errorHandler)  (CMRI_Packet &p);
 
     // Variables used by parser...
+    CMRI_Packet _packet;
     int _ptype, _paddr; // packet type and address
     byte  _pbody[CMRI_Packet::BODY_MAX + 1];  // TODO: +1 isn't needed, but might be useful for overflow protection
 
@@ -277,11 +264,9 @@ private:
  * Depends on the I2Cexpander library and its device handlers.
  */
 struct cpIOMap {
-    enum IOType { BUILTIN, I2C};
-
     I2Cexpander::ExpanderType device;   ///< Device type (BUILTIN or I2C device type)
-    int pin_address;        ///< pin (for builtin) or I2C address (for I2C)
-    const char *direction;  ///< I - input, O = output, lower case = invert
+    uintptr_t pin_address;              ///< pin (BUILTIN), I2C address, address of bool (BIT) or byte (BYTE)
+    const char *direction;              ///< I - input, O = output, lower case = invert
     /**
      * Behavior of the pin: pullups or initialization values
      * INPUT:  '+' =  pullup, ' ' =  float, '-' = pulldown (if supported)
@@ -291,11 +276,16 @@ struct cpIOMap {
     // the following are all initialized to 0/NULL...
     uint32_t mask;      ///< bitwise form of initialization I/O configuration
     uint32_t value;     ///< outputs initialized as 0 or 1?
-    uint32_t invert;    ///< invert i/o bit(s)?
+    uint32_t lastout;   ///< last output value
+    uint32_t lastin;    ///< last output value
+    uint32_t invertin;  ///< invert input bit(s)?
+    uint32_t invertout; ///< invert output bit(s)?
+    int range_start;    ///< what bits are managed by this entry?
+    int range_end;
     I2Cexpander *expander;
 
-    void setup(void);       ///< initialize the system based on the initialized state
-    int countIO(char io);   ///< return the number of bits configured as either I or O
+    int setup(unsigned int &bitcount);             ///< process and initialize things
+    int countIO(char io);                           ///< return the number of bits configured as either I or O
     int countInputs(void)  { return countIO('I'); }
     int countOutputs(void) { return countIO('O'); }
 
@@ -303,11 +293,18 @@ struct cpIOMap {
     static int  countIOMapOutputs(cpIOMap *iomap);  ///< operates on the array of cpIOMaps to count outputs
     static void setupIOMap(cpIOMap *iomap);         ///< configure ports, pins and devices used by the array
 
-    static bool getBit(int bitnum);                 ///< read the IOMap's "bitnum" input bit
-    static void setBit(int bitnum, bool val);       ///< write the IOMap's "bitnum" output bit
+    bool in_range(unsigned int bitcount) { return ((bitcount >= range_start) && (bitcount <= range_end)); }
+    bool getBit(int bitnum);                         ///< read the IOMap's "bitnum" input bit
+    void setBit(int bitnum, bool val);               ///< write the IOMap's "bitnum" output bit
+    // Functions that act on the array of IOMaps...
+
+    static bool getBit(cpIOMap *iomap, int bitnum);                 ///< find and read the IOMap's "bitnum" input bit
+    static void setBit(cpIOMap *iomap, int bitnum, bool val);       ///< find and write the IOMap's "bitnum" output bit
 
     static void collectIOMapInputs(cpIOMap *iomap, byte *body);     ///< fill body with input bits
     static void distributeIOMapOutputs(cpIOMap *iomap, byte *body); ///< take body bits and output them
+    static void processIOMapIO(cpIOMap *iomap, byte *body, char dir); ///< Building block for collect and distribute...
+
 };
 
 #define _END_OF_IOMAP_LIST_ { I2Cexpander::IGNORE, 0, NULL, NULL}, // Marker entry at end of IOMap list

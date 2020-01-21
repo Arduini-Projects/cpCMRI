@@ -1,21 +1,14 @@
 /**
  * cpNode - Control Point CMRI Node
  * =================================
- * This sketch is the code template for a CMRI serial protocol 
- * node implemented in an Arduino style system board, 
- * with optional I2C expanders used to increase the 
- * number of I/O points availble.  
+ * This sketch supports a minimal cpNode with no IOX expanders
  * 
  * The heavy lifting is done behind the scenes with the following class libraries:
  *     cpCMRI:  Implements all the protocol handling fiddly bits to work with CMRInet
- *     cpIOMap: Abstracts the reading and writing of bits to ports/pins and devices
+ *              includes
+ *                    CMRI_Packet: The details of a CMRInet packet structure.
+ *                    cpIOMap: Abstracts the reading and writing of bits to ports/pins and devices
  *     I2Cexpander:  abstracts the initialization, reading and writing details of 8- and 16-bit I2C expanders
- * 
- * The following sketch is an example of what a COMPLETE CMRI Node implementation might look like.
- * I have implemented and mock-tested all of the cpCMRI library, and most of the cpIPMap one, save the collect() and distribute() methods.
- * The I2Cexpander library is something I have been using for almost a decade now, and has proven useful in many other sketches.
- * 
- * Once I get the last bits working, I'll put all this up on github and recruit some pre-alpha testers.
  */
 
 #include <cpCMRI.h>
@@ -26,7 +19,7 @@
 //====    NODE CONFIGURATION PARAMETERS     ====
 //==============================================
 
-#define CMRINET_NODE_ID      20
+#define CMRINET_NODE_ID      3
 #define CMRINET_SPEED      9600  // make sure this matches your speed set in JMRI
 
 IOMap node_configuration[] = {
@@ -52,53 +45,43 @@ IOMap node_configuration[] = {
 };
 
 CMRI_Node *node;
-CMRI_Packet p;                        // for CMRInet send / receive...
-int txdelay = 0;                      // delay before sending packets...
+
+/**
+ * These routines are called automatically when the protocol_handler() routine gets either a 
+ * POLL or a TX packet.
+ * 
+ * POLL calls out to a routine that gathers input values and puts them into the provided packet 
+ */
+void gatherInputs(CMRI_Packet &p) {
+      cpIOMap::collectIOMapInputs(node_configuration, p.content());
+      Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p));
+}
+
+/**
+ * When a TX packet is received, this routine needs to distribute the output bits to the 
+ * pins and devices that need them.
+ */
+void distributeOutputs(CMRI_Packet &p) {
+      Serial.print("TX: ==> "); Serial.println(CMRI_Node::packetToString(p));
+      cpIOMap::distributeIOMapOutputs(node_configuration, p.content());
+}
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("CMRI Node - example 1");
+    Serial.println("CMRI Node - Minimal cpNode example");
 
     Serial1.begin(CMRINET_SPEED, SERIAL_8N2);
 
-    node = new(CMRI_Node(CMRINET_NODE_ID, Serial1));
     cpIOMap::setupIOMap(node_configuration);
+
+    node = new CMRI_Node(CMRINET_NODE_ID, Serial1);
+    node->set_num_input_bits(cpIOMap::countIOMapInputs(node_configuration));  // how many Input bits?
+    node->set_num_output_bits(cpIOMap::countIOMapOutputs(node_configuration)); // how many output bits?
+    node->setInputHandler(gatherInputs);
+    node->setOutputHandler(distributeOutputs);
 }
 
 void loop() {
-    CMRI_Packet::Type type;
-
-    type = node->get_packet(p);
-    switch (type) {
-      case CMRI_Packet::ERROR:    // we got a corrupted or invalid packet...
-          break;
-      case CMRI_Packet::NOOP:     // do nothing, nothing to see here, no bytes are moving over the CMRInet wires...
-          break;
-      case CMRI_Packet::INIT:     // initialize things...
-          if (p.address() == CMRINET_NODE_ID) {   // is it for us?
-              byte *body = p.content();
-              txdelay = body[1] * 256 + body[2];
-          }
-          break;
-      case CMRI_Packet::POLL:     // HOST wants our INPUT bits...
-          if (p.address() == CMRINET_NODE_ID) {   // is it for us?
-              // make the RX packet
-              cpIOMap::collectIOMapInputs(node_configuration, p.content());
-              p.set_type(CMRI_Packet::RX);
-              p.set_address(CMRINET_NODE_ID);
-              p.set_length( (input_bits + 7) / 8);
-              delayMicroseconds(txdelay * 10);
-              // send it out
-              node->put_packet(p);
-          }
-          break;
-      case CMRI_Packet::RX:       // ignore POLL responses from everyone...
-          break;
-      case CMRI_Packet::TX:       // HOST wants us to update our OUTPUTS
-          if (p.address() == CMRINET_NODE_ID) {   // is it for us?
-              cpIOMap::distributeIOMapOutputs(node_configuration, p.content());
-          }
-          break;
-    }
+    node->protocol_handler();
 }
 
