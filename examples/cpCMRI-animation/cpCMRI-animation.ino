@@ -37,7 +37,9 @@
 #include <I2Cexpander.h>
 #include <elapsedMillis.h>
 #include <Servo.h>
-
+#define DEBUG 1 // enable Serial printing of debug messages
+// #define DEBUG 0
+#define TRACE() if (DEBUG)
 
 //==============================================
 //====    NODE CONFIGURATION PARAMETERS     ====
@@ -119,21 +121,16 @@ CMRI_Node *node;
 
 void gatherInputs(CMRI_Packet &p) {
       cpIOMap::collectIOMapInputs(node_configuration, p.content());
-      Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p));
+      TRACE() { Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p));}
 }
 
 void distributeOutputs(CMRI_Packet &p) {
-      Serial.print("TX: ==> "); Serial.println(CMRI_Node::packetToString(p));
+      TRACE() { Serial.print("TX: ==> "); Serial.println(CMRI_Node::packetToString(p)); }
       cpIOMap::distributeIOMapOutputs(node_configuration, p.content());
 }
 
 void setup() {
-
     Wire.begin();
-    Serial.begin(115200);
-    Serial.println("CMRI Node - Mock testing");
-    Serial.print("Node address: "); Serial.println(CMRINET_NODE_ID, DEC);
-
     Serial1.begin(CMRINET_SPEED, SERIAL_8N2);
 
     cpIOMap::setupIOMap(node_configuration);
@@ -153,6 +150,15 @@ void setup() {
     door_current_position = door_desired_position = door_state ? door_open_position : door_closed_position;
     myservo.attach(servo_PIN); 
     myservo.write(door_desired_position);
+
+    TRACE() {
+        Serial.begin(115200);
+        Serial.println("CMRI Node - Animation example");
+        Serial.println("Configured for:");
+        Serial.print("    "); Serial.print(CMRINET_SPEED);  Serial.println(" Baud");
+        Serial.print("    "); Serial.print(node->get_num_input_bits());  Serial.println(" Inputs");
+        Serial.print("    "); Serial.print(node->get_num_output_bits()); Serial.println(" Outputs");
+    }
 }
 
 

@@ -13,7 +13,9 @@
 
 #include <cpCMRI.h>
 #include <I2Cexpander.h>
-
+#define DEBUG 1 // enable Serial printing of debug messages
+// #define DEBUG 0
+#define TRACE() if (DEBUG)
 
 //==============================================
 //====    NODE CONFIGURATION PARAMETERS     ====
@@ -22,7 +24,7 @@
 #define CMRINET_NODE_ID      3
 #define CMRINET_SPEED      9600  // make sure this matches your speed set in JMRI
 
-IOMap node_configuration[] = {
+cpIOMap node_configuration[] = {
     // device                 pin or                              '1'/'0' = initialized output ' ' = dontcare
     // type                    addr  I/O               initilize   '+'    = input pullup, ' ' = input HiZ
   { I2Cexpander::BUILTIN,      11,   "I",                "+"},
@@ -54,7 +56,7 @@ CMRI_Node *node;
  */
 void gatherInputs(CMRI_Packet &p) {
       cpIOMap::collectIOMapInputs(node_configuration, p.content());
-      Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p));
+      TRACE() { Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p)); }
 }
 
 /**
@@ -62,14 +64,12 @@ void gatherInputs(CMRI_Packet &p) {
  * pins and devices that need them.
  */
 void distributeOutputs(CMRI_Packet &p) {
-      Serial.print("TX: ==> "); Serial.println(CMRI_Node::packetToString(p));
+      TRACE() { Serial.print("TX: ==> "); Serial.println(CMRI_Node::packetToString(p)); }
       cpIOMap::distributeIOMapOutputs(node_configuration, p.content());
 }
 
 void setup() {
-    Serial.begin(115200);
-    Serial.println("CMRI Node - Minimal cpNode example");
-
+    Wire.begin();
     Serial1.begin(CMRINET_SPEED, SERIAL_8N2);
 
     cpIOMap::setupIOMap(node_configuration);
@@ -79,6 +79,15 @@ void setup() {
     node->set_num_output_bits(cpIOMap::countIOMapOutputs(node_configuration)); // how many output bits?
     node->setInputHandler(gatherInputs);
     node->setOutputHandler(distributeOutputs);
+
+    TRACE() {
+        Serial.begin(115200);
+        Serial.println("CMRI Node - Minimal cpNode example");
+        Serial.println("Configured for:");
+        Serial.print("    "); Serial.print(CMRINET_SPEED);  Serial.println(" Baud");
+        Serial.print("    "); Serial.print(node->get_num_input_bits());  Serial.println(" Inputs");
+        Serial.print("    "); Serial.print(node->get_num_output_bits()); Serial.println(" Outputs");
+    }
 }
 
 void loop() {
