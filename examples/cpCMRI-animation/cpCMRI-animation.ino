@@ -192,9 +192,9 @@ void loop() {
     if (timer_move_servo > DELAY_MOVE_SERVO) {  // move servo 1 degree at a time to simulate a slow door opening/closing
         if (door_current_position < door_desired_position) {
             myservo.write(++door_current_position);
-        } else {
+        } else if (door_current_position > door_desired_position){
             myservo.write(--door_current_position);
-        }
+        } // else the door is fully open or closed, so we have nothing to do
         timer_move_servo = 0;
     }
 
@@ -202,12 +202,14 @@ void loop() {
     status = 0;
     if (door_desired_position == door_current_position) {
         if (door_current_position == door_open_position) {
-	    status |= DOOR_OPEN;
-	} else if (door_current_position == door_closed_position) {
-	    status |= DOOR_CLOSED;
-	} else {
-	    status |= DOOR_AJAR;
-	}
+	        status |= DOOR_OPEN;
+        } else if (door_current_position == door_closed_position) {
+            status |= DOOR_CLOSED;
+        } else {
+            status |= DOOR_AJAR;
+        }
+    } else {
+        status |= DOOR_AJAR;
     }
     if (light_room1) {
     	status |= ROOM1_OCCUPIED;
