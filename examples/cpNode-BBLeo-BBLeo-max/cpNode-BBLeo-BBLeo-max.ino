@@ -2,13 +2,6 @@
  * cpNode - Control Point CMRI Node
  * =================================
  * This sketch supports the maximum-configured MRCS cpNode + IOX system with 144 I/O points.
- * 
- * The heavy lifting is done behind the scenes with the following class libraries:
- *     cpCMRI:  Implements all the protocol handling fiddly bits to work with CMRInet
- *              includes
- *                    CMRI_Packet: The details of a CMRInet packet structure.
- *                    cpIOMap: Abstracts the reading and writing of bits to ports/pins and devices
- *     I2Cexpander:  abstracts the initialization, reading and writing details of 8- and 16-bit I2C expanders
  */
 
 #include <cpCMRI.h>
@@ -18,32 +11,31 @@
 #define TRACE() if (DEBUG)
 
 //==============================================
-//====    NODE CONFIGURATION PARAMETERS     ====
+//====   BEGIN CONFIGURATION PARAMETERS     ====
 //==============================================
 
-#define CMRINET_NODE_ID       3
-#define CMRINET_SPEED      9600  // make sure this matches your speed set in JMRI
+#define CMRINET_NODE_ID        1  // can be [0..64]  change this - must be unique for each node...
+#define CMRINET_SPEED      19200  // make sure this matches the speed set in JMRI
 
 cpIOMap node_configuration[] = {
-    // device                 pin or                              '1'/'0' = initialized output ' ' = dontcare
-    // type                    addr  I/O               initilize   '+'    = input pullup, ' ' = input HiZ
-  { I2Cexpander::BUILTIN,      11,   "I",                "+"},			// individual pins on the processor
-  { I2Cexpander::BUILTIN,      10,   "I",                " "},			//' ' = regular pinMode(INPUT)
-  { I2Cexpander::BUILTIN,       9,   "I",                "+"},			// + = enable pullups (INPUT_PULLUP)
-  { I2Cexpander::BUILTIN,       8,   "i",                "+"},			// i = invert (0 becomes 1, 1 becomes 0)
-  { I2Cexpander::BUILTIN,       7,   "i",                " "},
-  { I2Cexpander::BUILTIN,       6,   "1",                " "},
-  { I2Cexpander::BUILTIN,       5,   "I",                " "},
-  { I2Cexpander::BUILTIN,       4,   "I",                " "},
-
+    // device type              PIN  I/O      '+' ' ' = input pullup or HiZ, '0' / '1' = initial value output
+  { I2Cexpander::BUILTIN,       4,   "I",                "+"},
+  { I2Cexpander::BUILTIN,       5,   "I",                "+"},
+  { I2Cexpander::BUILTIN,       6,   "I",                "+"},
+  { I2Cexpander::BUILTIN,       7,   "I",                "+"},
+  { I2Cexpander::BUILTIN,       8,   "I",                "+"},
+  { I2Cexpander::BUILTIN,       9,   "I",                "+"},
+  { I2Cexpander::BUILTIN,      10,   "I",                "+"},
+  { I2Cexpander::BUILTIN,      11,   "I",                "+"},
+  
+  { I2Cexpander::BUILTIN,      12,   "O",                "1"},
   { I2Cexpander::BUILTIN,      13,   "O",                "1"},
-  { I2Cexpander::BUILTIN,      12,   "o",                "0"},
-  { I2Cexpander::BUILTIN,      A0,   "O",                "0"},
-  { I2Cexpander::BUILTIN,      A1,   "O",                "0"},
-  { I2Cexpander::BUILTIN,      A2,   "o",                "1"},
-  { I2Cexpander::BUILTIN,      A3,   "o",                "1"},
-  { I2Cexpander::BUILTIN,      A4,   "o",                "0"},
-  { I2Cexpander::BUILTIN,      A5,   "o",                "1"},
+  { I2Cexpander::BUILTIN,      A0,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      A1,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      A2,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      A3,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      A4,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      A5,   "O",                "1"},
 
   { I2Cexpander::MCP23017,     0x20, "OOOOOOOOIIIIIIII", "00000000++++++++"},	// MCP23017 expanders add 16 bits each
   { I2Cexpander::MCP23017,     0x21, "OOOOOOOOOOOOOOOO", "0000000000000000"},
@@ -55,6 +47,11 @@ cpIOMap node_configuration[] = {
   { I2Cexpander::MCP23017,     0x27, "ooooooooiiiiiiii", "11111111++++++++"},	// lower case means invert state
   _END_OF_IOMAP_LIST_
 };
+
+//==============================================
+//====    END CONFIGURATION PARAMETERS      ====
+//==============================================
+
 
 CMRI_Node *node;
 
@@ -78,6 +75,11 @@ void distributeOutputs(CMRI_Packet &p) {
       cpIOMap::distributeIOMapOutputs(node_configuration, p.content());
 }
 
+void errorHandler(CMRI_Packet &p) {
+      TRACE() { Serial.print("ERROR: ==> "); Serial.println(CMRI_Node::packetToString(p));  }
+}
+
+
 void setup() {
     Serial1.begin(CMRINET_SPEED, SERIAL_8N2);
 
@@ -88,6 +90,7 @@ void setup() {
     node->set_num_output_bits(cpIOMap::countIOMapOutputs(node_configuration)); // how many output bits?
     node->setInputHandler(gatherInputs);
     node->setOutputHandler(distributeOutputs);
+    node->setErrorHandler(errorHandler);
 
     TRACE() {
         Serial.begin(115200);

@@ -11,10 +11,10 @@
 
 // Enable Serial.print() calls for debugging
 #define CMRI_DEBUG 0
-//#define CMRI_DEBUG (CMRI_DEBUG_PROTOCOL | CMRI_DEBUG_SERIAL | CMRI_DEBUG_IOMAP | CMRI_DEBUG_IO)
-//#define CMRI_DEBUG (CMRI_DEBUG_PROTOCOL | CMRI_DEBUG_IO)
-//#define CMRI_DEBUG CMRI_DEBUG_IO
-//#define CMRI_DEBUG CMRI_DEBUG_TIMING
+// #define CMRI_DEBUG (CMRI_DEBUG_PROTOCOL | CMRI_DEBUG_SERIAL | CMRI_DEBUG_IOMAP | CMRI_DEBUG_IO)
+// #define CMRI_DEBUG (CMRI_DEBUG_PROTOCOL | CMRI_DEBUG_IO)
+// #define CMRI_DEBUG CMRI_DEBUG_IOMAP
+// #define CMRI_DEBUG CMRI_DEBUG_TIMING | CMRI_DEBUG_IOMAP
 
 #define TRACE(level) if (CMRI_DEBUG & (level))  // { then execute block }
 
@@ -37,7 +37,7 @@ int CMRI_Node::readByte(void) {
         if (_serial.available() > 0) {
           return byte(_serial.read());
         }
-        if (timeout > 1) {
+        if (timeout > 3) {
             TRACE(CMRI_DEBUG_SERIAL) { Serial.println("CMRI_Node::readByte() TIMEOUT"); }
             return -1;  // after 10 character times @ 9600 baud (10mS), give up
         }
@@ -65,13 +65,15 @@ CMRI_Packet::Type CMRI_Node::protocol_handler(void) {
     TRACE(CMRI_DEBUG_TIMING) { time_begin = micros(); }
     if (_serial.available() <= 0) {  // fast return if nothing to read()
         TRACE(CMRI_DEBUG_TIMING) { time_end = micros();
-            if ((time_end - time_begin)> 1) {
+            if ((time_end - time_begin)> 25) {
                 Serial.print("Microseconds for nothing: ");
                 Serial.println(time_end - time_begin);
             }
         }
         return CMRI_Packet::NOOP;
     }
+    TRACE(CMRI_DEBUG_TIMING) { Serial.print("Serial queue:"); Serial.println(_serial.available()); }
+
 
     int idx = 0;      // incoming packet's BODY length
     int loops = 0;    // in SYNC state, count of sequential "SYN" chars seen
@@ -361,6 +363,15 @@ int cpIOMap::setup(unsigned int &bitcounter) {
                 maxsize = expander->getSize();
                 range_start = bitcounter;
                 range_end = bitcounter + expander->getSize();
+                TRACE(CMRI_DEBUG_IOMAP) {
+		    Serial.print("IOexpander @");
+		    Serial.print(pin_address);
+                    Serial.print(" type: ");
+                    Serial.print(device, HEX);
+                    Serial.print(" mask: ");
+                    Serial.print(mask, HEX);
+                    Serial.println(" initialized.");
+                }
             }
             if (strlen(direction) != maxsize) {
                 TRACE(CMRI_DEBUG_IOMAP) {

@@ -42,11 +42,18 @@
 #define TRACE() if (DEBUG)
 
 //==============================================
-//====    NODE CONFIGURATION PARAMETERS     ====
+//====   BEGIN CONFIGURATION PARAMETERS     ====
 //==============================================
 
-#define CMRINET_NODE_ID      3
-#define CMRINET_SPEED      9600  // make sure this matches your speed set in JMRI
+#define CMRINET_NODE_ID        1  // can be [0..64]  change this - must be unique for each node...
+#define CMRINET_SPEED      19200  // make sure this matches the speed set in JMRI
+
+
+//==============================================
+//====    END CONFIGURATION PARAMETERS      ====
+//==============================================
+
+//////// Animation implementation details follow ...
 
 /** 
  * Bits set/cleared by the CMRI HOST 
@@ -115,6 +122,7 @@ cpIOMap node_configuration[] = {
 
 _END_OF_IOMAP_LIST_
 };
+
 
 CMRI_Node *node;
 

@@ -1,14 +1,7 @@
 /**
  * cpNode - Control Point CMRI Node
  * =================================
- * This sketch supports a minimal cpNode with no IOX expanders
- * 
- * The heavy lifting is done behind the scenes with the following class libraries:
- *     cpCMRI:  Implements all the protocol handling fiddly bits to work with CMRInet
- *              includes
- *                    CMRI_Packet: The details of a CMRInet packet structure.
- *                    cpIOMap: Abstracts the reading and writing of bits to ports/pins and devices
- *     I2Cexpander:  abstracts the initialization, reading and writing details of 8- and 16-bit I2C expanders
+ * BBLeo BASE_NODE_RSMC_LOCK:  4 OUT 4 IN 8 OUT
  */
 
 #include <cpCMRI.h>
@@ -24,25 +17,30 @@
 #define CMRINET_NODE_ID        1  // can be [0..64]  change this - must be unique for each node...
 #define CMRINET_SPEED      19200  // make sure this matches the speed set in JMRI
 
+ 
 cpIOMap node_configuration[] = {
-    // device                 pin or                              '1'/'0' = initialized output ' ' = dontcare
-    // type                    addr  I/O               initilize   '+'    = input pullup, ' ' = input HiZ
-  { I2Cexpander::BUILTIN,      11,   "I",                "+"},
-  { I2Cexpander::BUILTIN,      10,   "I",                "+"},
-  { I2Cexpander::BUILTIN,       9,   "I",                "+"},
-  { I2Cexpander::BUILTIN,       8,   "i",                "+"},
-  { I2Cexpander::BUILTIN,       7,   "i",                " "},
-  { I2Cexpander::BUILTIN,       6,   "1",                " "},
-  { I2Cexpander::BUILTIN,       5,   "I",                " "},
-  { I2Cexpander::BUILTIN,       4,   "I",                " "},
+    // device type              PIN  I/O      '+' ' ' = input pullup or HiZ, '0' / '1' = initial value output
+  { I2Cexpander::BUILTIN,       4,   "O",                "1"},
+  { I2Cexpander::BUILTIN,       5,   "O",                "1"},
+  { I2Cexpander::BUILTIN,       6,   "O",                "1"},
+  { I2Cexpander::BUILTIN,       7,   "O",                "1"},
+  { I2Cexpander::BUILTIN,       8,   "O",                "1"},
+  { I2Cexpander::BUILTIN,       9,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      10,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      11,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      12,   "O",                "1"},
   { I2Cexpander::BUILTIN,      13,   "O",                "1"},
-  { I2Cexpander::BUILTIN,      12,   "O",                "0"},
-  { I2Cexpander::BUILTIN,      A0,   "O",                "0"},
-  { I2Cexpander::BUILTIN,      A1,   "O",                "0"},
-  { I2Cexpander::BUILTIN,      A2,   "o",                "1"},
-  { I2Cexpander::BUILTIN,      A3,   "o",                "1"},
-  { I2Cexpander::BUILTIN,      A4,   "o",                "0"},
-  { I2Cexpander::BUILTIN,      A5,   "o",                "1"},
+  { I2Cexpander::BUILTIN,      A0,   "O",                "1"},
+  { I2Cexpander::BUILTIN,      A1,   "O",                "1"},
+  
+  { I2Cexpander::BUILTIN,      A2,   "I",                "+"},
+  { I2Cexpander::BUILTIN,      A3,   "I",                "+"},
+  { I2Cexpander::BUILTIN,      A4,   "I",                "+"},
+  { I2Cexpander::BUILTIN,      A5,   "I",                "+"},
+  
+  // Add any I2C expanders here
+    // device type            I2Caddr  I/O      '+' ' ' = input pullup or HiZ, '0' / '1' = initial value output
+  { I2Cexpander::MCP23017,     0x20, "OOOOOOOOIIIIIIII", "11111111++++++++"},
   _END_OF_IOMAP_LIST_
 };
 
@@ -60,7 +58,7 @@ CMRI_Node *node;
  */
 void gatherInputs(CMRI_Packet &p) {
       cpIOMap::collectIOMapInputs(node_configuration, p.content());
-      TRACE() { Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p)); }
+      // TRACE() { Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p)); }
 }
 
 /**
