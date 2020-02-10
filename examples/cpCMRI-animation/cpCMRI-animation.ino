@@ -37,51 +37,39 @@
 #include <I2Cexpander.h>
 #include <elapsedMillis.h>
 #include <Servo.h>
-#define DEBUG 1 // enable Serial printing of debug messages
-// #define DEBUG 0
-#define TRACE() if (DEBUG)
 
 //==============================================
 //====   BEGIN CONFIGURATION PARAMETERS     ====
 //==============================================
+#define CMRI_NODE_ID               1    // can be [0..64]  change this - must be unique for each node...
+#define CMRI_SPEED             19200    // make sure this matches the speed set in JMRI
+#define CMRI_NODE_DESCRIPTION  "BBLeo Animation Automation Example"
 
-#define CMRINET_NODE_ID        1  // can be [0..64]  change this - must be unique for each node...
-#define CMRINET_SPEED      19200  // make sure this matches the speed set in JMRI
+#define DEBUG 1                         // enable Serial printing of debug messages
+// #define DEBUG 0                      // Turn off if you use Serial for CMRInet!
 
-
-//==============================================
-//====    END CONFIGURATION PARAMETERS      ====
-//==============================================
 
 //////// Animation implementation details follow ...
 
-/** 
- * Bits set/cleared by the CMRI HOST 
+/**
+ * Bits set/cleared by the CMRI HOST
  */
 
-bool door_state;         // 0 = closed, 1 = open 
+bool door_state;         // 0 = closed, 1 = open
 bool light_room1;        // 0 == off
 bool light_room2;        // 0 == off
 bool light_room3;        // 0 == off
-bool unused_bit5;
-bool unused_bit6;
-bool unused_bit7;
-bool unused_bit8;
 
 /**
- * STATUS values
+ * STATUS feedback values
  */
-const int DOOR_OPEN      = 0x01; 
-const int DOOR_AJAR      = 0x02;   // while door is moving, it is neither open or closed...
-const int DOOR_CLOSED    = 0x04;
-const int ROOM1_OCCUPIED = 0x10;
-const int ROOM2_OCCUPIED = 0x20;
-const int ROOM3_OCCUPIED = 0x40;
+bool door_open;
+bool door_ajar;
+bool door_closed;
+bool room1_occupied;
+bool room2_occupied;
+bool room3_occupied;
 
-/**
- * Bits we set/clear as feedback to the HOST
- */
-byte status;
 
 /**
  * PINS that we will use to control the animation
@@ -105,49 +93,128 @@ elapsedMillis timer_blinker;
 #define DELAY_BLINKER  60
 bool blinkstate = 0;
 
+// CMRI communication
 
-cpIOMap node_configuration[] = {
-    // device                 pin or                              '1'/'0' = initialized output ' ' = dontcare
-    // type                    addr  I/O               initilize   '+'    = input pullup, ' ' = input HiZ
-  { I2Cexpander::BIT,   (uintptr_t)&door_state,        "O",         "0"},
-  { I2Cexpander::BIT,   (uintptr_t)&light_room1,       "O",         "0"},
-  { I2Cexpander::BIT,   (uintptr_t)&light_room2,       "O",         "0"},
-  { I2Cexpander::BIT,   (uintptr_t)&light_room3,       "O",         "0"},
-  { I2Cexpander::BIT,   (uintptr_t)&unused_bit5,       "O",         "0"},  // it is good to have multiples of 8 bits for I's and O's
-  { I2Cexpander::BIT,   (uintptr_t)&unused_bit6,       "O",         "0"},
-  { I2Cexpander::BIT,   (uintptr_t)&unused_bit7,       "O",         "0"},
-  { I2Cexpander::BIT,   (uintptr_t)&unused_bit8,       "O",         "0"},
-  
-  { I2Cexpander::BYTE,  (uintptr_t)&status,            "IIIIIIII",  "        "},
+ioMap *setupMap() {
+    // Declare the I2C expanders you will be using, providing the device type and I2C address
+    I2Cexpander *mcp23017_20 = new I2Cexpander(I2Cexpander::MCP23017, 0x20);
 
-_END_OF_IOMAP_LIST_
-};
+    // There are 2x ways to interpret CMRI Body content (the IB and OB arrays):
+    // HOST_CENTRIC: keep the IB and OB completely independent from each other,
+    //               with disjoint pack and unpack mechanisms,
+    //               just like the BASIC code and JLC hardware currently does.
+    //               From the HOST's perspective, there are inputs and outputs,
+    //               and how the NODE interprets them is completely up to the NODE.
+    //               In simple terms, IB(1) and OB(1) refer to different I/O bits
+    // or
+    //
+    // NODE_CENTRIC: intermix the content and interpretation of IB and OB by
+    //               effectively turning them into a single logical structure with a different
+    //               pack/unpack mechanism.
+    //               From the NODE's perspective, the inputs and outputs are intertwined,
+    //               and the HOST sees the entire mixed list, and must take steps to not
+    //               output on input pins or input on output pins.
+    //               In simple terms, IB(1) and OB(1) refer to the SAME I/O bit, but only one is valid and can be used.
 
 
+    ioMap *iomap = new ioMap();  // ioMap::HOST_CENTRIC (default) or ioMap::NODE_CENTRIC
+
+
+    //    The following table is used to define and initialize the physically connected
+    //    pins/devices; it is also used to automatically pack and unpack input and output bits
+    //    in response to POLL and TRANSMIT packets.
+    //
+    //    The first column defines the DIRECTION of the I/O pin, either INPUT or OUTPUT.
+    //
+    //    Column 2 is the address of a bool variable
+    //
+    //    The 3rd column is "bit 0", the only value in a bool.
+    //
+    //    Column 4 holds pin attributes and behaviors, logically combined with "|":
+    //    MEM1 is the attribute for a bool variable.
+    //
+    //    Finally, each line has a comment that describes how it is used and what it is connected to.
+    //    This lets the sketch itself be part of the documentation of how the layout is wired.
+
+
+    iomap->add(OUTPUT,  &door_state,     0,   OUTPUT_LOW   | MEM1 ); //  door Open 1 or closed 0
+    iomap->add(OUTPUT,  &light_room1,    0,   OUTPUT_LOW   | MEM1 ); //  Light in room 1
+    iomap->add(OUTPUT,  &light_room2,    0,   OUTPUT_LOW   | MEM1 ); //  Light in room 2
+    iomap->add(OUTPUT,  &light_room3,    0,   OUTPUT_LOW   | MEM1 ); //  Light in room 3
+    iomap->add(OUTPUT,  &door_open,      0,   INPUT        | MEM1 ); //  door is all the way open
+    iomap->add(OUTPUT,  &door_ajar,      0,   INPUT        | MEM1 ); //  door is in the b=middle, not open or closed
+    iomap->add(OUTPUT,  &door_closed,    0,   INPUT        | MEM1 ); //  door is all the way closed
+    iomap->add(OUTPUT,  &room1_occupied, 0,   INPUT        | MEM1 ); //  Room 1's light is on
+    iomap->add(OUTPUT,  &room2_occupied, 0,   INPUT        | MEM1 ); //  Room 2's light
+    iomap->add(OUTPUT,  &room3_occupied, 0,   INPUT        | MEM1 ); //  Room 3's light
+
+    iomap->initialize();
+
+    return iomap;
+}
+//==============================================
+//====    END CONFIGURATION PARAMETERS      ====
+//==============================================
+
+
+ioMap *iomap;
 CMRI_Node *node;
 
+#define TRACE() if (DEBUG)
 
+/**
+ * These routines are called automatically when the protocol_handler() routine gets either a
+ * POLL or a TX packet.
+ *
+ * POLL calls out to this routine to gather input values and put them into the provided packet
+ */
 void gatherInputs(CMRI_Packet &p) {
-      cpIOMap::collectIOMapInputs(node_configuration, p.content());
-      TRACE() { Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p));}
+    iomap->pack(p.content(), p.length());
+    // TRACE() { Serial.print("POLL:==>\nRX: <== "); Serial.println(CMRI_Node::packetToString(p)); }
 }
 
+/**
+ * When a TX packet is received, this routine needs to distribute the output bits to the
+ * pins and devices that need them.
+ */
 void distributeOutputs(CMRI_Packet &p) {
-      TRACE() { Serial.print("TX: ==> "); Serial.println(CMRI_Node::packetToString(p)); }
-      cpIOMap::distributeIOMapOutputs(node_configuration, p.content());
+    // TRACE() { Serial.print("TX: ==> "); Serial.println(CMRI_Node::packetToString(p));  }
+    iomap->unpack(p.content(), p.length());
+}
+
+void errorHandler(CMRI_Packet &p) {
+    TRACE() { Serial.print("ERROR: ==> "); Serial.println(CMRI_Node::packetToString(p));  }
 }
 
 void setup() {
-    Wire.begin();
-    Serial1.begin(CMRINET_SPEED, SERIAL_8N2);
+    TRACE() {
+        Serial.begin(115200);
+        while (!Serial) {
+          ; // wait for serial port to connect. Needed for native USB on LEO
+        }
+        Serial.print("CMRI Node - ");
+        Serial.println(CMRI_NODE_DESCRIPTION);
+    }
 
-    cpIOMap::setupIOMap(node_configuration);
+    Serial1.begin(CMRI_SPEED, SERIAL_8N2);
 
-    node = new CMRI_Node(CMRINET_NODE_ID, Serial1);
-    node->set_num_input_bits(cpIOMap::countIOMapInputs(node_configuration));  // how many Input bits?
-    node->set_num_output_bits(cpIOMap::countIOMapOutputs(node_configuration)); // how many output bits?
+    iomap = setupMap();
+
+    node = new CMRI_Node(CMRI_NODE_ID, Serial1);
+    node->set_num_input_bits(iomap->numInputs());   // how many Input bits?
+    node->set_num_output_bits(iomap->numOutputs()); // how many output bits?
     node->setInputHandler(gatherInputs);
     node->setOutputHandler(distributeOutputs);
+    node->setErrorHandler(errorHandler);
+
+    TRACE() {
+        Serial.println("Configured for:");
+        Serial.print("    Address:   "); Serial.println(CMRI_NODE_ID, DEC);
+        Serial.print("    Baud Rate: "); Serial.println(CMRI_SPEED);
+        Serial.print("    Inputs:    "); Serial.println(node->get_num_input_bits());
+        Serial.print("    Outputs:   "); Serial.println(node->get_num_output_bits());
+        Serial.print("    IB and OB: "); Serial.println(iomap->isHostCentric() ? "Independent" : "Interleaved");
+    }
 
     pinMode(servo_PIN,     OUTPUT);
     pinMode(room1_LED_PIN, OUTPUT);
@@ -156,19 +223,10 @@ void setup() {
 
     last_door_state = door_state;
     door_current_position = door_desired_position = door_state ? door_open_position : door_closed_position;
-    myservo.attach(servo_PIN); 
+    myservo.attach(servo_PIN);
     myservo.write(door_desired_position);
 
-    TRACE() {
-        Serial.begin(115200);
-        Serial.println("CMRI Node - Animation example");
-        Serial.println("Configured for:");
-        Serial.print("    "); Serial.print(CMRINET_SPEED);  Serial.println(" Baud");
-        Serial.print("    "); Serial.print(node->get_num_input_bits());  Serial.println(" Inputs");
-        Serial.print("    "); Serial.print(node->get_num_output_bits()); Serial.println(" Outputs");
-    }
 }
-
 
 void loop() {
     // handle any communications from the HOST
@@ -207,26 +265,33 @@ void loop() {
     }
 
     // collect the animations's status for when a POLL command is received.
-    status = 0;
+    // set everything "off" and then turn on only the bits that matter...
+    door_open      = false;
+    door_closed    = false;
+    door_ajar      = false;
+    room1_occupied = false;
+    room2_occupied = false;
+    room3_occupied = false;
+
     if (door_desired_position == door_current_position) {
         if (door_current_position == door_open_position) {
-	        status |= DOOR_OPEN;
+	        door_open = true;
         } else if (door_current_position == door_closed_position) {
-            status |= DOOR_CLOSED;
+            door_closed = true;
         } else {
-            status |= DOOR_AJAR;
+            door_ajar = true;
         }
     } else {
-        status |= DOOR_AJAR;
+        door_ajar = true;
     }
     if (light_room1) {
-    	status |= ROOM1_OCCUPIED;
+    	room1_occupied = true;
     }
     if (light_room2) {
-    	status |= ROOM2_OCCUPIED;
+    	room2_occupied = true;
     }
     if (light_room3) {
-    	status |= ROOM3_OCCUPIED;
+    	room3_occupied = true;
     }
 }
 

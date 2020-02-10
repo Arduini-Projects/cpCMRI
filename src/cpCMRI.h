@@ -6,7 +6,7 @@
 #define CPCMRI_H
 
 
-#define CPCMRI_VERSION 0.0.1 // version of this library
+#define CPCMRI_VERSION 0.0.2 // version of this library
 #include <Arduino.h>
 #include <elapsedMillis.h>
 #include <I2Cexpander.h>
@@ -263,50 +263,55 @@ private:
  *
  * Depends on the I2Cexpander library and its device handlers.
  */
-struct cpIOMap {
-    I2Cexpander::ExpanderType device;   ///< Device type (BUILTIN or I2C device type)
-    uintptr_t pin_address;              ///< pin (BUILTIN), I2C address, address of bool (BIT) or byte (BYTE)
-    const char *direction;              ///< I - input, O = output, lower case = invert
-    /**
-     * Behavior of the pin: pullups or initialization values
-     * INPUT:  '+' =  pullup, ' ' =  float, '-' = pulldown (if supported)
-     * OUTPUT: '1' = high, '0' = low, ' ' = not specified
-     */
-    const char *initialize;
-    // the following are all initialized to 0/NULL...
-    uint32_t mask;      ///< bitwise form of initialization I/O configuration
-    uint32_t value;     ///< outputs initialized as 0 or 1?
-    uint32_t lastout;   ///< last output value
-    uint32_t lastin;    ///< last output value
-    uint32_t invertin;  ///< invert input bit(s)?
-    uint32_t invertout; ///< invert output bit(s)?
-    int range_start;    ///< what bits are managed by this entry?
-    int range_end;
+
+#define MAX_EXPANDERS        8
+
+#define BUILTIN (NULL)
+#define MEM1        0x0100  ///< device-> a bool variable (1 bit)
+#define MEM8        0x0200  ///< device-> a byte variable (8 bits)
+#define MEM16       0x0400  ///< device-> an uint16_t variable (16 bits)
+
+#define INVERT      0x1000
+#define OUTPUT_LOW  0x2000
+#define OUTPUT_HIGH 0x4000
+
+class ioEntry {
+  public:
+    ioEntry(int iodir, void *device, int iopin, unsigned int attributes);
+    bool read(void);
+    void write(bool val) ;
+
+    byte iodirection;
     I2Cexpander *expander;
-
-    int setup(unsigned int &bitcount);             ///< process and initialize things
-    int countIO(char io);                           ///< return the number of bits configured as either I or O
-    int countInputs(void)  { return countIO('I'); }
-    int countOutputs(void) { return countIO('O'); }
-
-    static int  countIOMapInputs(cpIOMap *iomap);   ///< operates on the array of cpIOMaps to count inputs
-    static int  countIOMapOutputs(cpIOMap *iomap);  ///< operates on the array of cpIOMaps to count outputs
-    static void setupIOMap(cpIOMap *iomap);         ///< configure ports, pins and devices used by the array
-
-    bool in_range(unsigned int bitcount) { return ((bitcount >= range_start) && (bitcount <= range_end)); }
-    bool getBit(int bitnum);                         ///< read the IOMap's "bitnum" input bit
-    void setBit(int bitnum, bool val);               ///< write the IOMap's "bitnum" output bit
-    // Functions that act on the array of IOMaps...
-
-    static bool getBit(cpIOMap *iomap, int bitnum);                 ///< find and read the IOMap's "bitnum" input bit
-    static void setBit(cpIOMap *iomap, int bitnum, bool val);       ///< find and write the IOMap's "bitnum" output bit
-
-    static void collectIOMapInputs(cpIOMap *iomap, byte *body);     ///< fill body with input bits
-    static void distributeIOMapOutputs(cpIOMap *iomap, byte *body); ///< take body bits and output them
-    static void processIOMapIO(cpIOMap *iomap, byte *body, char dir); ///< Building block for collect and distribute...
-
+    byte pin;
+    unsigned int flags;
+    ioEntry *next;
 };
 
-#define _END_OF_IOMAP_LIST_ { I2Cexpander::IGNORE, 0, NULL, NULL}, // Marker entry at end of IOMap list
+class ioMap {
+    public:
+    enum MapType { HOST_CENTRIC, NODE_CENTRIC };
+
+    ioMap(  MapType t = HOST_CENTRIC );
+    ioMap *add(int iodir, void *device, int pin, unsigned int attributes);
+    ioMap *initialize(void);
+
+    int numInputs();
+    int numOutputs();
+
+    bool isHostCentric() { return (_type == HOST_CENTRIC); }
+
+    void unpack(byte *OB, int maxlen);
+    void pack(byte *IB, int maxlen);
+
+    private:
+    MapType _type;
+    ioEntry *_root;
+    ioEntry *_tail;
+
+    I2Cexpander *seen  [MAX_EXPANDERS];
+    unsigned int config[MAX_EXPANDERS];
+    int          numSeen = 0;
+};
 
 #endif // CPCMRI_H

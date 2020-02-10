@@ -3,14 +3,23 @@
 #include <I2Cexpander.h>
 
 
-#define CMRI_DEBUG_PROTOCOL 0x01
-#define CMRI_DEBUG_SERIAL   0x02
-#define CMRI_DEBUG_IOMAP    0x04
-#define CMRI_DEBUG_IO       0x08
-#define CMRI_DEBUG_TIMING   0x10
+#define CMRI_DEBUG_PROTOCOL   0x0001
+#define CMRI_DEBUG_SERIAL     0x0002
+#define CMRI_DEBUG_IOMAP      0x0004
+#define CMRI_DEBUG_IO         0x0008
+#define CMRI_DEBUG_TIMING     0x0010
+
+#define DEBUG_INFO            0x0100
+#define DEBUG_FREERAM         0x0200
+#define DEBUG_IOMAP           0x0400
+#define DEBUG_IOMAP_ADD       0x0800
+#define DEBUG_IOMAP_INIT      0x1000
+#define DEBUG_IOMAP_PACK      0x2000
+#define DEBUG_IOMAP_UNPACK    0x4000
+#define DEBUG_IOENTRY         0x8000
 
 // Enable Serial.print() calls for debugging
-#define CMRI_DEBUG 0
+#define CMRI_DEBUG (0)
 // #define CMRI_DEBUG (CMRI_DEBUG_PROTOCOL | CMRI_DEBUG_SERIAL | CMRI_DEBUG_IOMAP | CMRI_DEBUG_IO)
 // #define CMRI_DEBUG (CMRI_DEBUG_PROTOCOL | CMRI_DEBUG_IO)
 // #define CMRI_DEBUG CMRI_DEBUG_IOMAP
@@ -206,502 +215,420 @@ void CMRI_Node::send_packet(CMRI_Packet &packet) {
 }
 
 
-int cpIOMap::countIO(char io) {  ///< return the number of bits configured as either I or O
+/**
+ * Simple linked list of IO entities
+ */
+
+ioEntry::ioEntry(int iodir, void *device, int iopin, unsigned int attributes) :
+    iodirection(iodir),
+    expander((I2Cexpander *)device),
+    pin(iopin),
+    flags(attributes),
+    next(NULL) {
+      // ensure pin is always in range for mem variables
+      if (pin < 0) pin = 0;
+      if ((flags & MEM1)  && (pin >  0))  pin =  0;
+      if ((flags & MEM8)  && (pin >  7))  pin =  7;
+      if ((flags & MEM16) && (pin > 15))  pin = 15;
+}
+
+
+bool ioEntry::read(void) {
+    bool val;
+
+    if (expander == BUILTIN) {
+        val = digitalRead(pin);
+    } else if (flags & (MEM1 | MEM8 | MEM16)) {
+        val = bitRead(*(bool *)(expander), pin);
+    } else {
+        val = bitRead(expander->current(), pin);
+    }
+
+    TRACE(DEBUG_IOMAP_UNPACK) {
+        Serial.print("ioEntry::write(");
+        Serial.print(val, DEC);
+    }
+    if (flags & INVERT) {
+        val = !val;
+         TRACE(DEBUG_IOMAP_UNPACK) {
+            Serial.print(" INVERT=> ");
+            Serial.print(val, DEC);
+        }
+    }
+    TRACE(DEBUG_IOMAP_UNPACK) {
+        Serial.print(")");
+    }
+    return val;
+}
+
+void ioEntry::write(bool val) {
+    TRACE(DEBUG_IOMAP_UNPACK) {
+        Serial.print("ioEntry::write(");
+        Serial.print(val, DEC);
+
+    }
+    if (flags & INVERT) {
+        val = !val;
+        TRACE(DEBUG_IOMAP_UNPACK) {
+            Serial.print(" INVERT=> ");
+            Serial.print(val, DEC);
+        }
+    }
+    if (expander == BUILTIN) {
+        TRACE(DEBUG_IOMAP_UNPACK) { Serial.print(" BUILTIN "); }
+        digitalWrite(pin, val);
+    } else if (flags & (MEM1 | MEM8 | MEM16)) {
+        TRACE(DEBUG_IOMAP_UNPACK) { Serial.print(" MEMORY "); }
+        bitWrite(*(bool *)(expander), pin, val);
+    } else {    // I2Cexpander
+        TRACE(DEBUG_IOMAP_UNPACK) { Serial.print(" I2C "); }
+        bitWrite(expander->next, pin, val);
+    }
+    TRACE(DEBUG_IOMAP_UNPACK) {
+        Serial.println(")");
+    }
+}
+
+/**
+ *
+ */
+
+ioMap::ioMap(MapType t) {
+  _type = t;
+  _root = NULL;
+  _tail = NULL;
+
+  TRACE(DEBUG_IOMAP) {
+    Serial.print("ioMap::ioMap(");
+    Serial.print( (t == HOST_CENTRIC) ? "HOST_CENTRIC" : (t == NODE_CENTRIC) ? "NODE_CENTRIC" : "UNKNOWN");
+    Serial.println(");");
+  }
+}
+
+ioMap *ioMap::add(int iodir, void *device, int pin, unsigned int attributes) {
+  TRACE(DEBUG_IOMAP_ADD) {
+    Serial.print("ioMap::add(");
+    Serial.print( (iodir == INPUT) ? "INPUT" : (iodir == OUTPUT) ? "OUTPUT" : "UNKNOWN");
+    Serial.print(", ");
+    if (device == NULL) {
+      Serial.print("BUILTIN");
+    } else {
+      Serial.print("<"); Serial.print((unsigned int)device, HEX); Serial.print(">");
+    }
+    Serial.print(", ");
+    Serial.print(pin, DEC);
+    Serial.print(", flags:0x");
+    Serial.print((unsigned int)attributes, HEX);
+    Serial.print(": ");
+    const char *sep = "";
+    if (attributes & INPUT_PULLUP) {
+      Serial.print(sep); Serial.print("INPUT_PULLUP"); sep="|";
+    }
+    if (attributes & OUTPUT_HIGH) {
+      Serial.print(sep); Serial.print("OUTPUT_HIGH"); sep="|";
+    }
+    if (attributes & OUTPUT_LOW) {
+      Serial.print(sep); Serial.print("OUTPUT_LOW"); sep="|";
+    }
+    if (attributes & MEM1) {
+      Serial.print(sep); Serial.print("MEM1"); sep="|";
+    }
+    if (attributes & MEM8) {
+      Serial.print(sep); Serial.print("MEM8"); sep="|";
+    }
+    if (attributes & MEM16) {
+      Serial.print(sep); Serial.print("MEM16"); sep="|";
+    }
+    if (attributes & INVERT) {
+      Serial.print(sep); Serial.print("INVERT"); sep="|";
+    }    Serial.print("); ");
+    Serial.print(" _root = <");
+    Serial.print((unsigned int)_root, HEX);
+    Serial.print("> ");
+    Serial.print(" _tail = <");
+    Serial.print((unsigned int)_tail, HEX);
+    Serial.println(">");
+  }
+  ioEntry *io = new ioEntry(iodir, device, pin, attributes);
+  if (_root == NULL) {
+    _root = io;
+    _tail = _root;
+  } else {
+    _tail->next = io;
+    _tail = io;
+  }
+  return this;
+}
+
+ioMap *ioMap::initialize(void) {
+  TRACE(DEBUG_IOMAP_INIT) {
+    Serial.println("ioMap::initialize()");
+  }
+  int count = 0;
+  byte initial[MAX_EXPANDERS];
+
+  auto getExpanderNum = [&](I2Cexpander *e) {
+    for (int idx = 0; idx < numSeen; idx++) {
+      if (seen[idx] == e) return idx;
+    } // didn't find it...
+    if (numSeen < MAX_EXPANDERS) {
+      seen[numSeen] = e;
+      config[numSeen] = 0;
+      initial[numSeen] = 0;
+      return numSeen++;
+    }
+    return -1;
+  };
+
+  // collect all I2C expanders and their bit directions...
+  for (ioEntry *io = _root; io; io = io->next) {
+    TRACE(DEBUG_IOMAP_INIT) {
+      Serial.print("    ioEntry:");
+      if (count < 10) Serial.print(" ");
+      Serial.print(count++, DEC);
+      Serial.print(" ");
+    }
+
+    bool val = 0;
+    if (io->flags | OUTPUT_HIGH) {
+      val = 1;
+    } else if (io->flags | OUTPUT_LOW) {
+      val = 0;
+    }
+    if (io->flags | INVERT) {
+      val = !val;
+    }
+
+    bool conf = ((io->iodirection == INPUT) ? 1 : 0);
+
+    byte attr = INPUT;
+    if (io->flags | INPUT_PULLUP) {
+      attr = INPUT_PULLUP;
+    }
+
+     TRACE(DEBUG_IOMAP_INIT) {
+      Serial.print("pin: ");
+      if (io->pin < 10) Serial.print(" ");
+      Serial.print(io->pin);
+      Serial.print(", direction: ");
+      Serial.print((io->iodirection == INPUT) ? "IN " : "OUT");
+      Serial.print(", initialize: ");
+      Serial.print((io->flags & OUTPUT_HIGH) ? 1 : 0);
+      Serial.print(", invert: ");
+      Serial.print((io->flags & INVERT) ? 1 : 0);
+    }
+
+    if (io->expander == BUILTIN) {
+      TRACE(DEBUG_IOMAP_INIT) {
+        Serial.println(" Builtin");
+      }
+
+      if (io->iodirection == INPUT) {
+        pinMode(io->pin, attr);
+      } else if (io->iodirection == OUTPUT) {
+        pinMode(io->pin, OUTPUT);
+        digitalWrite(io->pin, val);
+      }
+    } else if (io->flags & (MEM1 | MEM8 | MEM16)) {
+      TRACE(DEBUG_IOMAP_INIT) {
+        Serial.print(" Memory: ");
+        if (io->flags & MEM1)  { Serial.print("MEM1"); }
+        if (io->flags & MEM8)  { Serial.print("MEM8"); }
+        if (io->flags & MEM16) { Serial.print("MEM16");}
+        Serial.println();
+      }
+      if (io->iodirection == OUTPUT) {
+        io->write(val);
+      }
+    } else {      // I2C expanders...
+      int idx = getExpanderNum(io->expander);
+      TRACE(DEBUG_IOMAP_INIT) {
+        Serial.print(" Expander: ");
+        Serial.print(idx);
+        if (idx < 0) Serial.print(" ERROR");
+        Serial.println();
+      }
+      if (idx < 0) return this;  // error
+
+      config[idx]  |= conf << io->pin;
+      initial[idx] |= val  << io->pin;
+    }
+  }
+
+
+  // After loop completes, initialize all the expanders...
+  for (int idx = 0; idx < numSeen; idx++) {
+    TRACE(DEBUG_IOMAP_INIT) {
+        Serial.print(" Writing Expander: ");
+        Serial.print(idx);
+        Serial.print(": config=0x");
+        Serial.print(config[idx], HEX);
+        Serial.print(", write=0x");
+        Serial.print(initial[idx], HEX);
+        Serial.println();
+    }
+    seen[idx]->init(config[idx]);
+    seen[idx]->write(initial[idx]);
+  }
+}
+
+
+void ioMap::unpack(byte *OB, int maxlen) {
+  TRACE(DEBUG_IOMAP_UNPACK) {
+    Serial.print("ioMap::unpack(");
+    Serial.print("OB[");
+    const char *sep = "0x";
+    for (int x = 0; x < maxlen; x++) {
+      Serial.print(sep);
+      Serial.print(OB[x], HEX);
+      sep = ", 0x";
+    }
+    Serial.print("]:");
+    Serial.print(maxlen, DEC);
+    Serial.print(") ");
+    Serial.print(_type == HOST_CENTRIC ? "HOST_CENTRIC"
+                  :_type == NODE_CENTRIC ? "NODE_CENTRIC"
+                  :                        "UNKNOWN" );
+    Serial.println("");
+  }
+
+  // walk the bits in OB and the ordered list in _root, assigning output bits to each output...
+  ioEntry *io = _root;
+  int count = 0;
+  for (int _bit = 0; (_bit < (maxlen * 8)) && io; _bit++) {    // two alternatives:
+    // 1) HOST_CENTRIC: each bit in OB is an output bit, find each ioEntry of type OUTPUT and assign, or
+    // 2) NODE_CENTRIC: each bit in OB is associated with an ioEntry, but only type==OUTPUTs get used/assigned.
+    // the MapType _type determines which heurstic to use
+
+    if (_type == HOST_CENTRIC) {
+      while (io && (io->iodirection != OUTPUT)) {
+        count++;
+        io=io->next;
+      }
+      if (io == NULL) {
+        TRACE(DEBUG_IOMAP_UNPACK) {
+          Serial.println("    Break: out of ioEntries");
+        }
+        break; // at end of ioEntries...
+      }
+    } // else SPARSE
+
+    if (io && (io->iodirection == OUTPUT)) {
+      bool val = bitRead(OB[_bit / 8], (_bit % 8));
+
+      TRACE(DEBUG_IOMAP_UNPACK) {
+        Serial.print("    ioEntry:");
+        Serial.print(count);
+        Serial.print(" bit: ");
+        Serial.print(_bit, DEC);
+        Serial.print(", val:");
+        Serial.print(val);
+        Serial.print("  ");
+      }
+      io->write(val);
+    }
+    if (io == NULL) {
+      TRACE(DEBUG_IOMAP_UNPACK) {
+          Serial.println("    Break: out of ioEntries");
+      }
+      break; // at end of ioEntries...
+    }
+    count++;
+    io=io->next;
+  }
+
+
+  // after loop completes, write out all the expanders...
+  for (int idx = 0; idx < numSeen; idx++) {
+    seen[idx]->write();
+  }
+}
+
+void ioMap::pack(byte *IB, int maxlen) {
+  TRACE(DEBUG_IOMAP_PACK) {
+    Serial.print("ioMap::pack(");
+    Serial.print(_type == HOST_CENTRIC ? "HOST_CENTRIC"
+                  :_type == NODE_CENTRIC ? "NODE_CENTRIC"
+                  :                        "UNKNOWN" );
+    Serial.println(")");
+  }
+  // pre-read all the expanders...
+  for (int idx = 0; idx < numSeen; idx++) {
+    seen[idx]->read();
+  }
+  // walk the bits in IB and the ordered list in _root, reading bits from each input...
+  ioEntry *io = _root;
+  int count = 0;
+  for (int _bit = 0; (_bit < (maxlen * 8)) && io; _bit++) {
+    // two alternatives:
+    // 1) HOST_CENTRIC: each bit in IB is an input bit, find each ioEntry of type INPUT and read it, or
+    // 2) NODE_CENTRIC: each bit in IB is associated with an ioEntry, but only type==INPUTs get used/read.
+    // the MapType _type determines which heurstic to use
+
+    if (_type == HOST_CENTRIC) {
+      while (io && (io->iodirection != INPUT)) {
+        count++;
+        io=io->next;
+      }
+      if (io == NULL) {
+        TRACE(DEBUG_IOMAP_PACK) {
+          Serial.println("    Break: out of ioEntries");
+        }
+        break; // at end of ioEntries...
+      }
+    } // else SPARSE
+
+
+    // read the bits
+    if (io && (io->iodirection == INPUT)) {
+      bool val = io->read();
+      TRACE(DEBUG_IOMAP_PACK) {
+        Serial.print("    ioEntry:");
+        Serial.print(count);
+        Serial.print(" bit: ");
+        Serial.print(_bit, DEC);
+        Serial.print(", val:");
+        Serial.println(val);
+      }
+      bitWrite(IB[_bit / 8], (_bit % 8), val);
+    }
+
+    count++;
+    if (io == NULL) {
+      TRACE(DEBUG_IOMAP_UNPACK) {
+          Serial.println("    Break: out of ioEntries");
+      }
+      break; // at end of ioEntries...
+    }
+    io=io->next;
+  }
+}
+
+
+int ioMap::numInputs() {
+    ioEntry *io = _root;
     int count = 0;
-    const char *I = "Ii1";  // characters that signify Inputs ..
-    const char *O = "Oo0";  // .. and Outputs
-    const char *aliases;
-    if (io == 'I') aliases = I;
-    else if (io == 'O') aliases = O;
-    else {
-        TRACE(CMRI_DEBUG_IOMAP) {
-            Serial.print("cpIOMap::countIO('");
-            Serial.print((char) io);
-            Serial.print("') INVALID argument");
+    if (_type == NODE_CENTRIC) { // count = number of i/o bits total, ignoring I or O direction...
+        for (io = _root; io; io = io->next) { count++; }
+        return count;
+    } else {
+        for (io = _root; io; io = io->next) {
+            if (io->iodirection == INPUT) { count++; }
         }
-        return 0;
-    }
-
-    if (device == I2Cexpander::IGNORE) return 0;
-    for (int idy = 0; direction[idy]; idy++) {
-        if (strchr(aliases, direction[idy]) != NULL) count++;
-    }
-    return count;
-}
-
-int cpIOMap::setup(unsigned int &bitcounter) {
-    int mode;
-    bool need_invert = false;
-    bool err = false;
-
-    switch (device) {
-        case I2Cexpander::IGNORE: break;
-        case I2Cexpander::BUILTIN:
-        case I2Cexpander::BIT:
-            range_start = range_end = bitcounter++;
-            switch (direction[0]) {
-                case 'i': need_invert = true;   // FALLTHRU
-                case 'I':
-                case '1':
-                    mask = 1;
-                    invertin = need_invert;
-                    switch (initialize[0]) {
-                        case '+':
-                            mode = INPUT_PULLUP;
-                            break;
-                        case ' ':
-                            mode = INPUT;
-                            break;
-                        case '-':
-                        default:
-                            mode = INPUT;
-                            break;
-                    }
-                    if (device == I2Cexpander::BUILTIN) {
-                        pinMode((int) pin_address, mode);
-                        lastin = digitalRead((int) pin_address) ^ invertin;
-                    } else {
-                        lastin = *((bool *)pin_address) ^ invertin;
-                    }
-                    break;
-
-                case 'o': need_invert = true;   // FALLTHRU
-                case 'O':
-                case '0':
-                    mask = 0;
-                    mode = OUTPUT;
-                    invertout = need_invert;
-                    switch (initialize[0]) {
-                        case '1':
-                        case 'I':
-                        case 'i':
-                            value = 1;
-                            break;
-                        case '0':
-                        case 'O':
-                        case 'o':
-                            value = 0;
-                            break;
-                        case ' ':           // no initialization specified
-                            value = 0;
-                            break;
-                        default:
-                            value = 0;
-                            break;
-                    }
-                    if (device == I2Cexpander::BUILTIN) {
-                        pinMode((int) pin_address, mode);
-                        digitalWrite((int)pin_address, (value ^ invertout));
-                    } else {
-                        *((bool *)pin_address) = value ^ invertout;
-                    }
-                    lastout = value;
-                    break;
-
-                default:    // not handled...
-                    TRACE(CMRI_DEBUG_IOMAP) {
-                        Serial.print("cpIOMap: Unknown configuration direction '");
-                        Serial.print(char(direction[0]));
-                        Serial.println("'");
-                    }
-                    break;
-            }
-            break;
-
-        default:  // some sort of I2C expander or BYTE memory variable...
-            invertin = invertout = 0;
-            for (int x = 0; direction[x] && initialize[x]; x++) {
-                need_invert = false;
-                switch (direction[x]) {
-                    case 'i': need_invert = true;   // FALLTHRU
-                    case 'I':
-                    case '1':
-                        mask   = ((mask   << 1) | 1);
-                        value  = ((value  << 1) | 0);
-                        invertin = ((invertin << 1) | (need_invert ? 1 : 0));
-                        break;
-
-                    case 'o': need_invert = true;   // FALLTHRU
-                    case 'O':
-                    case '0':
-                        mask  = ((mask << 1) | 0);
-                        switch (initialize[x]) {
-                            case '1':
-                            case 'I':
-                            case 'i':
-                                value = ((value << 1) | 1);
-                                break;
-                            default:
-                                value = ((value << 1) | 0);
-                                break;
-                        }
-                        invertout = ((invertout << 1) | (need_invert ? 1 : 0));
-                        break;
-
-                    default:
-                        break;
-                }
-            }
-            mask = mask;
-            lastout = value;
-            int maxsize;
-            if (device == I2Cexpander::BYTE) {
-                byte *b = (byte *)pin_address;
-
-                lastin = *b ^ invertin;  // grab any input bits...
-                *b =  ((lastout ^ mask) |   // only outputs: ensure all input bits are zero
-                       (~mask ^ lastin)) ^   // only input bits: ensure all output bits are zero
-                       invertout;
-                maxsize = 8;
-                range_start = bitcounter;
-                range_end = bitcounter + maxsize;
-            } else {
-                expander = new I2Cexpander();
-                expander->init((size_t)pin_address, device, mask, true);
-                expander->write(value ^ invertout); // initial values
-                lastin = expander->read() ^ invertin;
-                maxsize = expander->getSize();
-                range_start = bitcounter;
-                range_end = bitcounter + expander->getSize();
-                TRACE(CMRI_DEBUG_IOMAP) {
-		    Serial.print("IOexpander @");
-		    Serial.print(pin_address);
-                    Serial.print(" type: ");
-                    Serial.print(device, HEX);
-                    Serial.print(" mask: ");
-                    Serial.print(mask, HEX);
-                    Serial.println(" initialized.");
-                }
-            }
-            if (strlen(direction) != maxsize) {
-                TRACE(CMRI_DEBUG_IOMAP) {
-                    Serial.print("Error: size mismatch: direction string has ");
-                    Serial.print(strlen(direction));
-                    Serial.println(" bits defined.");
-                }
-                err = true;
-            }
-            if (strlen(initialize) != maxsize) {
-                TRACE(CMRI_DEBUG_IOMAP) {
-                    Serial.print("Error: size mismatch: initialization string has ");
-                    Serial.print(strlen(initialize));
-                    Serial.println(" bits defined.");
-                }
-                err = true;
-            }
-            if (err) {
-                TRACE(CMRI_DEBUG_IOMAP) {
-                    Serial.print("Error: size mismatch: I/O expander supports ");
-                    Serial.print(maxsize);
-                    Serial.println(" bits.");
-                }
-                return -1;      // error
-            }
-            break;
-    }
-    return device;
-}
-
-// Helper functions
-// static class members that work on the array of cpIOMaps...
-
-/**
- * Walk thru the config array and count the number of Input bits so we know how many bits to send to HOST
- * @param iomap Array of IOMap port or device configuration and initialization specifications
- */
-int cpIOMap::countIOMapInputs(cpIOMap *iomap) {
-    int retval = 0;
-    for (int idx = 0; ; idx++) {
-        cpIOMap *m = &(iomap[idx]);
-        if (m->device == I2Cexpander::IGNORE) break;
-            retval += m->countInputs();
-    }
-    return retval;
-}
-
-
-/**
- * Walk thru the config tree and count the number of Output bits so we know how many bits to read from HOST
- * @param iomap Array of IOMap port or device configuration and initialization specifications
- */
-int cpIOMap::countIOMapOutputs(cpIOMap *iomap) {
-    int retval = 0;
-    for (int idx = 0; ; idx++) {
-        cpIOMap *m = &(iomap[idx]);
-        if (m->device == I2Cexpander::IGNORE) break;
-            retval += m->countOutputs();
-    }
-    return retval;
-}
-
-/**
- * Walk thru the config tree and initialize the physical ports and devices
- * @param iomap Array of IOMap port or device configuration and initialization specifications
- */
-void cpIOMap::setupIOMap(cpIOMap *iomap) {
-    unsigned int bit_count = 0;
-    unsigned long time_begin, time_end;
-    TRACE(CMRI_DEBUG_TIMING) { time_begin = micros(); }
-    for (int idx = 0;; idx++) {
-        cpIOMap *m = &(iomap[idx]);
-        if (m->device == I2Cexpander::IGNORE) break;
-
-        TRACE(CMRI_DEBUG_IOMAP) {
-            const char *prefix = "";
-            int base = DEC;
-            if (m->device == I2Cexpander::BUILTIN) {
-                base = DEC;
-                prefix = "";
-            } else {
-                base = HEX;
-                prefix = "0x";
-            }
-            Serial.print("calling m->setup(");
-            Serial.print(m->device);
-            Serial.print(", ");
-            Serial.print(prefix);
-            Serial.print((unsigned int) m->pin_address, base);
-            Serial.print(", \"");
-            Serial.print(m->direction);
-            Serial.print("\", \"");
-            Serial.print(m->initialize);
-            Serial.println("\")\t");
-        }
-        int cc = m->setup(bit_count);
-    }
-    TRACE(CMRI_DEBUG_TIMING) {
-        time_end = micros();
-        Serial.print("Microseconds to setup IOMaps: ");
-        Serial.println(time_end - time_begin);
+        return count;
     }
 }
 
-/**
- * fill body with input bits referenced in the cpIOMap array
- * @param iomap
- * @param body
- */
-void cpIOMap::collectIOMapInputs(cpIOMap *iomap, byte *body)     { processIOMapIO(iomap, body, 'I'); }
-
-/**
- * take body bits and output them to the ports in the cpIOMap array
- * @param iomap
- * @param body
- */
-void cpIOMap::distributeIOMapOutputs(cpIOMap *iomap, byte *body) { processIOMapIO(iomap, body, 'O'); }
-
-/**
- * do the grunt work of reading and writing all the bits in the IOMap list
- * @param iomap
- * @param body
- * @param dir   'I' to read from hardware into body or 'O' to write from body to hardware...
- */
-void cpIOMap::processIOMapIO(cpIOMap *iomap, byte *body, char dir) {
-    int body_bit_idx = 0;
-    bool need_invert = false;
-    unsigned long time_begin, time_end;
-    TRACE(CMRI_DEBUG_TIMING) { time_begin = micros(); }
-
-    TRACE(CMRI_DEBUG_IOMAP) {
-        Serial.print("\nprocessIOMapIO(map, body, '");
-        Serial.print(dir);
-        Serial.println(")");
-    }
-
-    for (int idx = 0; ; idx++) {  // each IOMap entry...
-        cpIOMap *map = &(iomap[idx]);
-        if (map->device == I2Cexpander::IGNORE) {
-            TRACE(CMRI_DEBUG_TIMING) {
-                time_end = micros();
-                Serial.print("Microseconds to process I/O: ");
-                Serial.println(time_end - time_begin);
-            }
-            return;
+int ioMap::numOutputs() {
+    ioEntry *io = _root;
+    int count = 0;
+    if (_type == NODE_CENTRIC) { // count = number of i/o bits total, ignoring I or O direction...
+        for (io = _root; io; io = io->next) { count++; }
+        return count;
+    } else {
+        for (io = _root; io; io = io->next) {
+            if (io->iodirection == OUTPUT) { count++; }
         }
-        int lastbit = 1;
-        if (map->device == I2Cexpander::BYTE) {
-            if (dir == 'I') {
-                    map->lastin = *((byte *)(map->pin_address)) ^ map->invertin;   // grab any input bits...
-                }
-                if (dir == 'O') {
-                    map->lastout = 0;
-                }
-                lastbit = 8;
-        } else if (map->device > I2Cexpander::BYTE) {  // must be I2C...
-            if (map->expander != NULL) {
-                if (dir == 'I') {
-                    map->lastin = map->expander->read() ^ map->invertin;
-                }
-                if (dir == 'O') {
-                    map->lastout = 0;
-                }
-                lastbit = map->expander->getSize();
-            } else {
-                TRACE(CMRI_DEBUG_IOMAP) {
-                    Serial.println("ERROR: expander pointer is NULL!");
-                }
-            }
-        }
-
-        TRACE(CMRI_DEBUG_IOMAP) {
-            Serial.print("    Map: dev=");
-            Serial.print(map->device);
-            Serial.print(" bits=");
-            Serial.print(lastbit);
-            Serial.print(": ");
-        }
-        for (int bit = 0; bit < lastbit; bit++) {
-            bool m = bitRead(map->mask, bit);     // mask bit
-            char val = '-';
-            if (dir == 'I' && m == 1) {   // input needed
-                bool v = map->getBit(bit);
-                val = v ? '1' : '0';
-                bitWrite((body[(body_bit_idx / 8)]), (body_bit_idx % 8), v);
-                body_bit_idx++;
-            }
-            if (dir == 'O' && m == 0) {   // otherwise, output
-                bool v = bitRead((body[(body_bit_idx / 8)]), (body_bit_idx % 8));
-                val = v ? '1' : '0';
-                map->setBit(bit, v);
-                body_bit_idx++;
-            }
-            TRACE(CMRI_DEBUG_IOMAP) {
-                Serial.print(val);
-                Serial.print(" ");
-            }
-        }
-        TRACE(CMRI_DEBUG_IOMAP) {
-            Serial.println();
-        }
-        if (map->device == I2Cexpander::BYTE) {
-            if (dir == 'O') {
-                byte *b = (byte *)(map->pin_address);
-                byte v= (
-                                (map->lastout ^ map->mask) |   // only outputs: ensure all input bits are zero
-                                (~map->mask ^ map->lastin)     // only input bits: ensure all output bits are zero
-                        );
-                *b = v ^ map->invertout;
-            }
-        } else if (map->device != I2Cexpander::BUILTIN) {  // must be I2C...
-            if (map->expander != NULL) {
-                if (dir == 'O') {
-                    map->expander->write(map->lastout ^ map->invertout);
-                }
-            }
-        }
-    }
-    // NOTREACHED
-}
-
-/**
- * Find the requested bit (reading expander state as needed) and return its value.
- * @param iomap     The list of maps
- * @param bitnum    The bit number (0..numbits) that should be read
- * @return          The vlue of the bit
- */
-bool cpIOMap::getBit(cpIOMap *iomap, int bitnum) {
-    TRACE(CMRI_DEBUG_IO) {
-        Serial.print("cpIOMap::getBit(");
-        Serial.print(bitnum, DEC);
-        Serial.println(")");
-    }
-    for (int idx = 0;; idx++) {
-        // for each IOMap entry...
-        cpIOMap *map = &(iomap[idx]);
-        if (map->device == I2Cexpander::IGNORE) {
-            return 0;  // at end of list, didn't find handler
-        }
-        if (map->in_range(bitnum)) {
-            if (map->device == I2Cexpander::BYTE) {
-                map->lastin = *((byte *)(map->pin_address)) ^ map->invertin;   // grab any input bits...
-            } else if ((map->device > I2Cexpander::BYTE)   // a I2C device...
-                && (map->mask)) {                       // with at lease 1 input bit
-                    map->lastin = map->expander->read() ^ map->invertin;
-            }
-            return map->getBit(bitnum - map->range_start);
-        }
-    }
-}
-
-/**
- * Get the state of an input bit.
- * Caller MUST ensure that I2C expanders are read before this routine is called,
- * as it only looks at the cached last read value...
- * @param bitnum
- * @param v
- */
-bool cpIOMap::getBit(int bit) {
-    if (device == I2Cexpander::IGNORE) return 0;
-    bool m = bitRead(mask, bit);     // mask bit
-    bool v;
-    if (m == 1) {   // input needed
-        if (device == I2Cexpander::BIT) {
-            v = *((bool *)pin_address);
-        } else if (device == I2Cexpander::BUILTIN) {
-            v = digitalRead((int)pin_address);
-        } else {
-            v = bitRead(lastin, bit);
-        }
-        return v ^ bitRead(invertin, bit);
-    } else {         // what was last output?
-        v = bitRead(lastout, bit);   // last output bit
-        return v ^ bitRead(invertout, bit);
-    }
-}
-
-/**
- * find the pin/device that corresponds to the desired bit, and set it as requested
- * if the bit in question is part of an expander, write it out after changing it state.
- */
-void cpIOMap::setBit(cpIOMap *iomap, int bitnum, bool val) {
-    TRACE(CMRI_DEBUG_IO) {
-        Serial.print("cpIOMap::setBit(");
-        Serial.print(bitnum, DEC);
-        Serial.println(")");
-    }
-    for (int idx = 0;; idx++) {
-        // for each IOMap entry...
-        cpIOMap *map = &(iomap[idx]);
-        if (map->device == I2Cexpander::IGNORE) {
-            return;  // at end of list, didn't find handler
-        }
-        if (map->in_range(bitnum)) {
-            map->setBit(bitnum - map->range_start, val);
-            if (map->device == I2Cexpander::BYTE) {
-                *((byte *)(map->pin_address)) =
-                        (
-                                (map->lastout ^ map->mask) |   // only outputs: ensure all input bits are zero
-                                (~map->mask ^ map->lastin)     // only input bits: ensure all output bits are zero
-                        ) ^ map->invertout;
-            } else if (map->device != I2Cexpander::BUILTIN) {  // a I2C device...
-                map->expander->write(map->lastout ^ map->invertout);
-            }
-            return;
-        }
-    }
-}
-
-/**
- * Update the output state with a specific bit.
- * Caller MUST ensure that I2C expanders are written after bits are changed...
- * @param bitnum
- * @param v
- */
-void cpIOMap::setBit(int bit, bool v) {
-    if (device == I2Cexpander::IGNORE) return;
-    bool m = bitRead(mask, bit);     // mask bit
-
-    if (m == 0) {   // output needed
-        if (device == I2Cexpander::BIT) {
-            lastout = v;
-            *((bool *)pin_address) = v ^ invertout;
-        } else if (device == I2Cexpander::BUILTIN) {
-            lastout = v;
-            bool i = bitRead(invertout, bit);
-            digitalWrite((int)pin_address, v ^ i);
-        } else {
-            v = bitWrite(lastout, bit, v);
-        }
-        return;
+        return count;
     }
 }
